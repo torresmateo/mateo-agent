@@ -1,0 +1,8 @@
+# Claude credentials
+claude-config/
+
+# Workspace files
+workspace/
+
+# Docker
+.dockerignore

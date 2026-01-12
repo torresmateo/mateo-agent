@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  claude-dev:
+    build: .
+    container_name: claude-dangerous
+    volumes:
+      # Mount your Claude config (contains credentials)
+      - ./claude-config:/config
+      # Mount your workspace
+      - ./workspace:/workspace
+    environment:
+      - CLAUDE_CONFIG_DIR=/config
+    stdin_open: true
+    tty: true
