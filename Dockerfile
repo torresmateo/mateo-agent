@@ -28,6 +28,16 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+    dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+    tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install Node.js 24 LTS
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     apt-get install -y nodejs && \
@@ -39,8 +49,9 @@ RUN curl -fsSL https://bun.sh/install | bash
 # Install Claude CLI
 RUN npm install -g @anthropic-ai/claude-code
 
-# Create config directory
-RUN mkdir -p ${CLAUDE_CONFIG_DIR}
+# Create config directories for Claude, GitHub, and secrets
+RUN mkdir -p ${CLAUDE_CONFIG_DIR} /gh-config /secrets && \
+    chmod 755 /gh-config /secrets
 
 # Create entrypoint script to setup user
 RUN echo '#!/bin/bash\n\

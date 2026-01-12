@@ -6,6 +6,7 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git branch:*)",
+      "Bash(git push:*)",
       "Bash(docker build:*)",
       "Bash(docker run:*)",
       "Bash(curl:*)",
@@ -16,7 +17,39 @@
       "Bash(~/.profile)",
       "Bash(docker info:*)",
       "Bash(/Users/mateo/PROGRAMMING/mateo-agent/claude-session.sh:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(git -C /Users/mateo/PROGRAMMING/mateo-agent log --oneline)",
+      "Bash(git -C /Users/mateo/PROGRAMMING/mateo-agent show --stat a041b05)",
+      "Bash(gh:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "WebSearch",
+      "Bash(./claude-session.sh:*)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/*.key)",
+      "Read(**/*.pem)",
+      "Read(**/*credentials*.json)",
+      "Read(**/*secrets*.json)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Edit(**/.env)",
+      "Edit(**/.env.local)",
+      "Edit(**/*.key)",
+      "Edit(**/*.pem)",
+      "Edit(**/*credentials*.json)",
+      "Edit(**/*secrets*.json)",
+      "Write(**/.env)",
+      "Write(**/*.key)",
+      "Write(**/*.pem)",
+      "Write(**/*credentials*.json)",
+      "Write(**/*secrets*.json)"
     ]
   }
 }

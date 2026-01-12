@@ -9,9 +9,11 @@ A Docker container with Ubuntu 24.04, Node.js 24, Bun, Git, Claude CLI, and esse
 - **Bun** - Fast JavaScript runtime
 - **Claude CLI** - Anthropic's official CLI
 - **Git** - Version control
+- **GitHub CLI** - Create PRs, manage issues, and more
 - **Development Tools** - ripgrep, fd-find, jq, vim, nano, tmux, htop, and more
 - **Build Tools** - gcc, make, python3, pip
 - **Session Manager** - Manage multiple isolated Claude sessions with git worktree support
+- **Secret Management** - Secure handling of API keys and credentials with automatic leak prevention
 
 ## Session Manager (Recommended)
 
@@ -38,6 +40,62 @@ cd /path/to/your/project
 ```
 
 **See [README-sessions.md](README-sessions.md) for complete documentation.**
+
+### GitHub Authentication
+
+Setup GitHub CLI for all sessions:
+
+```bash
+./claude-session.sh github-auth
+```
+
+Inside Claude sessions, you can now use:
+- `gh pr create` - Create pull requests
+- `gh pr list` - List PRs
+- `gh issue create` - Create issues
+- All other gh CLI commands
+
+### Secret Management
+
+The session manager provides secure secret handling:
+
+#### Global Secrets (All Sessions)
+
+Store API keys and credentials in:
+```
+~/.config/claude-container/secrets/.env.global
+```
+
+Example:
+```bash
+OPENAI_API_KEY=sk-...
+AWS_ACCESS_KEY_ID=AKIA...
+```
+
+#### Project Secrets (Per Session)
+
+Each session auto-creates a `.env` file:
+```bash
+./claude-session.sh start
+# A .env file is created automatically in your project
+# Add project-specific secrets there
+```
+
+#### Secret Files
+
+Store credential files (like `service-account.json`) in:
+```
+~/.config/claude-container/secrets/
+```
+
+Access them in sessions at `/secrets/filename`.
+
+#### Protection
+
+Secret files are automatically:
+- Added to `.gitignore`
+- Blocked from Claude reading/editing (configurable)
+- Mounted read-only in containers
 
 ## Quick Start
 
@@ -114,6 +172,7 @@ claude chat --dangerously-disable-sandbox
 ## Installed Tools
 
 - curl, wget, git
+- GitHub CLI (gh)
 - Node.js 24, npm, Bun
 - Claude CLI
 - Python 3 with pip

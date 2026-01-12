@@ -7,6 +7,8 @@ Manage multiple isolated Claude Code sessions using Docker containers with git w
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
+- [GitHub Authentication](#github-authentication)
+- [Secret Management](#secret-management)
 - [Usage](#usage)
 - [Common Workflows](#common-workflows)
 - [Configuration](#configuration)
@@ -102,6 +104,174 @@ alias cs='/Users/mateo/PROGRAMMING/mateo-agent/claude-session.sh'
 ```
 
 Now use as `cs start`, `cs list`, etc.
+
+## GitHub Authentication
+
+### Setup
+
+```bash
+claude-session.sh github-auth
+```
+
+This will:
+1. Check for existing GitHub credentials (`~/.config/gh/`)
+2. Offer to copy them or authenticate fresh
+3. Store credentials at `~/.config/claude-container/gh/`
+4. Make `gh` CLI available in all sessions
+
+### Usage
+
+```bash
+claude-session.sh start
+# Inside Claude:
+gh pr create --title "My PR" --body "Description"
+gh pr list
+gh issue list
+```
+
+### Re-authentication
+
+If your token expires:
+
+```bash
+claude-session.sh github-auth --reauth
+```
+
+## Secret Management
+
+### Overview
+
+Three levels of secret storage:
+
+1. **Global Secrets**: Shared across all sessions
+2. **Project Secrets**: Per-session `.env` file
+3. **Credential Files**: Service accounts, certificates, etc.
+
+### Global Secrets
+
+**Location**: `~/.config/claude-container/secrets/.env.global`
+
+Edit this file to add API keys available in all sessions:
+
+```bash
+# Edit global secrets
+nano ~/.config/claude-container/secrets/.env.global
+
+# Add your keys:
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+These environment variables are automatically available in every session.
+
+### Project Secrets
+
+Each session automatically creates a `.env` file in your project:
+
+```bash
+cd /workspace/work  # or /workspace/main
+cat .env
+
+# Add project-specific secrets:
+DATABASE_URL=postgresql://...
+API_KEY=abc123
+```
+
+The `.env` file is:
+- Automatically created on session start
+- Added to `.gitignore`
+- Protected from Claude reading it (by default)
+- Only visible to your code/scripts
+
+### Credential Files
+
+Store sensitive files like:
+- `service-account.json`
+- `id_rsa.key`
+- `certificate.pem`
+
+**Storage location**: `~/.config/claude-container/secrets/`
+
+**Access in sessions**: `/secrets/filename`
+
+Example:
+
+```bash
+# On host, add your credential file:
+cp ~/Downloads/service-account.json ~/.config/claude-container/secrets/
+
+# In session, use it:
+export GOOGLE_APPLICATION_CREDENTIALS=/secrets/service-account.json
+```
+
+### Secret Protection
+
+Automatic protection prevents accidental leaks:
+
+#### 1. Git Ignore Protection
+
+Patterns automatically added to `.gitignore`:
+- `.env`
+- `.env.local`
+- `.env.*.local`
+- `*.key`
+- `*.pem`
+- `*credentials*.json`
+- `*secrets*.json`
+
+#### 2. Claude Read/Write Blocking
+
+By default, Claude cannot:
+- Read secret files (prevents accidental exposure in chat)
+- Edit secret files (prevents accidental commits)
+- Write secret patterns to git
+
+**Override when needed**: You can temporarily allow access by updating `.claude/settings.local.json`.
+
+#### 3. Read-Only Mounting
+
+Global secrets directory is mounted read-only (`/secrets:ro`) so containers can't modify shared credentials.
+
+### Best Practices
+
+1. **Never commit secrets**: Use `.env.example` with placeholder values
+2. **Rotate tokens regularly**: Use `github-auth --reauth` for GitHub
+3. **Use global for shared keys**: Put commonly-used keys in `.env.global`
+4. **Use project for specific keys**: Put project-specific keys in `.env`
+5. **Use files for complex credentials**: Service accounts, certificates → `/secrets/`
+
+### Troubleshooting
+
+#### Secret not available in session
+
+```bash
+# Check global secrets are loaded:
+env | grep API_KEY
+
+# Check .env is in current directory:
+ls -la .env
+
+# Check secrets directory is mounted:
+ls -la /secrets/
+```
+
+#### Claude can't read .env file
+
+This is intentional for security. To allow reading:
+
+1. Edit `.claude/settings.local.json`
+2. Remove the deny rule for `.env`
+3. Restart the session
+
+#### Secret accidentally committed
+
+```bash
+# Remove from git history:
+git rm --cached .env
+git commit --amend
+
+# Rotate the leaked credentials immediately
+```
 
 ## Usage
 

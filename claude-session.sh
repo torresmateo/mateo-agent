@@ -8,6 +8,8 @@ set -euo pipefail
 
 DOCKER_IMAGE="${CLAUDE_IMAGE:-claude-dangerous}"
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.config/claude-container/config}"
+GH_CONFIG_DIR="${CLAUDE_GH_CONFIG_DIR:-${HOME}/.config/claude-container/gh}"
+SECRETS_DIR="${CLAUDE_SECRETS_DIR:-${HOME}/.config/claude-container/secrets}"
 LABEL_PREFIX="claude-session"
 
 # ============================================================================
@@ -59,6 +61,174 @@ check_credentials() {
       claude auth login
 
     echo "Authentication complete"
+  fi
+}
+
+check_gh_credentials() {
+  if [ ! -d "$GH_CONFIG_DIR" ] || [ ! -f "$GH_CONFIG_DIR/hosts.yml" ]; then
+    return 1
+  fi
+  return 0
+}
+
+setup_gh_credentials() {
+  echo "GitHub credentials not found at $GH_CONFIG_DIR"
+  echo ""
+  echo "Setting up GitHub authentication..."
+  mkdir -p "$GH_CONFIG_DIR"
+
+  # Option 1: Copy existing credentials
+  if [ -d "$HOME/.config/gh" ] && [ -f "$HOME/.config/gh/hosts.yml" ]; then
+    read -p "Copy GitHub credentials from ~/.config/gh? [Y/n] " -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+      cp -r "$HOME/.config/gh/"* "$GH_CONFIG_DIR/"
+      echo "GitHub credentials copied"
+      return 0
+    fi
+  fi
+
+  # Option 2: Authenticate in container
+  echo "Creating temporary container for GitHub authentication..."
+  docker run -it --rm \
+    -v "$GH_CONFIG_DIR:/gh-config" \
+    -e GH_CONFIG_DIR=/gh-config \
+    "$DOCKER_IMAGE" \
+    gh auth login
+
+  if [ $? -eq 0 ]; then
+    echo ""
+    echo "GitHub authentication complete"
+
+    # Verify authentication
+    docker run --rm \
+      -v "$GH_CONFIG_DIR:/gh-config" \
+      -e GH_CONFIG_DIR=/gh-config \
+      "$DOCKER_IMAGE" \
+      gh auth status
+
+    return 0
+  else
+    echo "Error: GitHub authentication failed"
+    return 1
+  fi
+}
+
+ensure_secrets_dir() {
+  if [ ! -d "$SECRETS_DIR" ]; then
+    mkdir -p "$SECRETS_DIR"
+    chmod 700 "$SECRETS_DIR"
+
+    # Create global env file with example
+    cat > "$SECRETS_DIR/.env.global" <<'EOF'
+# Global secrets shared across all sessions
+# Add your API keys and credentials here
+#
+# Example:
+# OPENAI_API_KEY=sk-...
+# AWS_ACCESS_KEY_ID=AKIA...
+# DATABASE_URL=postgresql://...
+EOF
+    chmod 600 "$SECRETS_DIR/.env.global"
+
+    # Create README
+    cat > "$SECRETS_DIR/README.md" <<'EOF'
+# Secrets Directory
+
+This directory stores sensitive credentials used across Claude sessions.
+
+## Files
+
+- `.env.global` - Environment variables loaded into all sessions
+- Other files - API keys, service account JSONs, etc. (mounted at /secrets in containers)
+
+## Security
+
+- This directory is mounted READ-ONLY into containers
+- Files here should NEVER be committed to git
+- Use 600 permissions for sensitive files
+
+## Usage
+
+### Environment Variables
+Add to `.env.global`:
+```
+OPENAI_API_KEY=sk-...
+```
+
+### Credential Files
+Store files like `service-account.json` here, access in sessions at:
+```
+/secrets/service-account.json
+```
+
+### Project-Specific Secrets
+Use `.env` in your project workspace for project-specific secrets.
+EOF
+  fi
+}
+
+ensure_gitignore_protection() {
+  local workspace_dir="$1"
+  local gitignore="$workspace_dir/.gitignore"
+
+  # Patterns to protect
+  local patterns=(
+    ".env"
+    ".env.local"
+    ".env.*.local"
+    "*.key"
+    "*.pem"
+    "*credentials*.json"
+    "*secrets*.json"
+    "*.p12"
+    "*.pfx"
+  )
+
+  # Create or update .gitignore
+  touch "$gitignore"
+
+  # Add header if not present
+  if ! grep -q "# Secret protection" "$gitignore" 2>/dev/null; then
+    echo "" >> "$gitignore"
+    echo "# Secret protection (auto-added by claude-session)" >> "$gitignore"
+  fi
+
+  # Add each pattern if not present
+  for pattern in "${patterns[@]}"; do
+    if ! grep -q "^${pattern}$" "$gitignore" 2>/dev/null; then
+      echo "$pattern" >> "$gitignore"
+    fi
+  done
+}
+
+create_env_template() {
+  local workspace_dir="$1"
+  local env_file="$workspace_dir/.env"
+  local env_example="$workspace_dir/.env.example"
+
+  # Create .env if it doesn't exist
+  if [ ! -f "$env_file" ]; then
+    cat > "$env_file" <<'EOF'
+# Project-specific secrets
+# This file is automatically added to .gitignore
+#
+# Add your API keys and configuration here:
+# API_KEY=your-key-here
+# DATABASE_URL=your-db-url
+EOF
+    chmod 600 "$env_file"
+  fi
+
+  # Create .env.example if it doesn't exist
+  if [ ! -f "$env_example" ]; then
+    cat > "$env_example" <<'EOF'
+# Project-specific secrets template
+# Copy to .env and fill in your values
+#
+# API_KEY=
+# DATABASE_URL=
+EOF
   fi
 }
 
@@ -159,6 +329,15 @@ cmd_start() {
   local host_gid=$(id -g)
   local host_user=$(id -un)
 
+  # Ensure secrets directory exists
+  ensure_secrets_dir
+
+  # Prepare env-file argument if global secrets exist
+  local env_file_arg=""
+  if [ -f "$SECRETS_DIR/.env.global" ]; then
+    env_file_arg="--env-file $SECRETS_DIR/.env.global"
+  fi
+
   # Create container with labels
   docker create \
     --name "$container_name" \
@@ -169,7 +348,11 @@ cmd_start() {
     --label "${LABEL_PREFIX}.host-uid=$host_uid" \
     --label "${LABEL_PREFIX}.host-gid=$host_gid" \
     -v "$CONFIG_DIR:/config" \
+    -v "$GH_CONFIG_DIR:/gh-config" \
+    -v "$SECRETS_DIR:/secrets:ro" \
+    $env_file_arg \
     -e CLAUDE_CONFIG_DIR=/config \
+    -e GH_CONFIG_DIR=/gh-config \
     -e HOST_UID=$host_uid \
     -e HOST_GID=$host_gid \
     -e HOST_USER=$host_user \
@@ -202,6 +385,47 @@ cmd_start() {
     work_dir="/workspace/work"
     echo "Worktree created at: $work_dir"
   fi
+
+  # Setup secret protection and .env template
+  docker exec "$container_name" bash -c "
+    work_dir=\"work\"
+    if [ ! -d /workspace/work/.git ]; then
+      work_dir=\"main\"
+    fi
+    cd /workspace/\$work_dir
+
+    # Create .env if not exists
+    if [ ! -f .env ]; then
+      cat > .env <<'EOF'
+# Project-specific secrets
+# This file is automatically added to .gitignore
+EOF
+      chmod 600 .env
+    fi
+
+    # Create .env.example if not exists
+    if [ ! -f .env.example ]; then
+      cat > .env.example <<'EOF'
+# Project-specific secrets template
+# Copy to .env and fill in your values
+EOF
+    fi
+
+    # Update .gitignore
+    if [ -f .git/config ] || [ -f ../.git/config ]; then
+      touch .gitignore
+      if ! grep -q '# Secret protection' .gitignore; then
+        echo '' >> .gitignore
+        echo '# Secret protection (auto-added by claude-session)' >> .gitignore
+      fi
+
+      for pattern in .env .env.local '.env.*.local' '*.key' '*.pem' '*credentials*.json' '*secrets*.json' '*.p12' '*.pfx'; do
+        if ! grep -q \"^\${pattern}\$\" .gitignore; then
+          echo \"\$pattern\" >> .gitignore
+        fi
+      done
+    fi
+  " 2>/dev/null || true
 
   # Clean up excluded patterns
   if [ ${#exclude_patterns[@]} -gt 0 ]; then
@@ -451,6 +675,15 @@ cmd_clone() {
   local host_gid=$(id -g)
   local host_user=$(id -un)
 
+  # Ensure secrets directory exists
+  ensure_secrets_dir
+
+  # Prepare env-file argument if global secrets exist
+  local env_file_arg=""
+  if [ -f "$SECRETS_DIR/.env.global" ]; then
+    env_file_arg="--env-file $SECRETS_DIR/.env.global"
+  fi
+
   # Create new container
   docker create \
     --name "$new_container" \
@@ -462,7 +695,11 @@ cmd_clone() {
     --label "${LABEL_PREFIX}.host-uid=$host_uid" \
     --label "${LABEL_PREFIX}.host-gid=$host_gid" \
     -v "$CONFIG_DIR:/config" \
+    -v "$GH_CONFIG_DIR:/gh-config" \
+    -v "$SECRETS_DIR:/secrets:ro" \
+    $env_file_arg \
     -e CLAUDE_CONFIG_DIR=/config \
+    -e GH_CONFIG_DIR=/gh-config \
     -e HOST_UID=$host_uid \
     -e HOST_GID=$host_gid \
     -e HOST_USER=$host_user \
@@ -581,6 +818,218 @@ cmd_logs() {
   docker logs "$container_name" "$@"
 }
 
+cmd_github_auth() {
+  local force_reauth=false
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --reauth)
+        force_reauth=true
+        shift
+        ;;
+      *)
+        echo "Error: Unknown option: $1"
+        echo ""
+        echo "Usage: claude-session github-auth [--reauth]"
+        exit 1
+        ;;
+    esac
+  done
+
+  # Check current status
+  if check_gh_credentials && [ "$force_reauth" = false ]; then
+    echo "GitHub credentials already configured"
+    echo ""
+    echo "Verifying authentication..."
+    docker run --rm \
+      -v "$GH_CONFIG_DIR:/gh-config" \
+      -e GH_CONFIG_DIR=/gh-config \
+      "$DOCKER_IMAGE" \
+      gh auth status
+
+    echo ""
+    echo "To re-authenticate, run: claude-session github-auth --reauth"
+    return 0
+  fi
+
+  # Force re-authentication if requested
+  if [ "$force_reauth" = true ]; then
+    echo "Re-authenticating with GitHub..."
+    echo ""
+  fi
+
+  # Setup or re-setup credentials
+  if setup_gh_credentials; then
+    echo ""
+    echo "✓ GitHub authentication configured successfully!"
+    echo ""
+    echo "GitHub CLI (gh) is now available in all Claude sessions."
+
+    # Check if permissions need updating
+    local settings_file=".claude/settings.local.json"
+    if [ -f "$settings_file" ]; then
+      if ! grep -q "Bash(gh:" "$settings_file" 2>/dev/null; then
+        echo ""
+        echo "NOTE: Add GitHub CLI permissions to $settings_file:"
+        echo ""
+        cat <<'EOF'
+  "Bash(gh:*)",
+  "Bash(gh auth:*)",
+  "Bash(gh pr:*)",
+  "Bash(gh issue:*)"
+EOF
+      fi
+    fi
+  else
+    echo "GitHub authentication setup failed"
+    exit 1
+  fi
+}
+
+cmd_upgrade() {
+  local input_name="$1"
+
+  if [ -z "$input_name" ]; then
+    echo "Error: Container name required"
+    echo ""
+    echo "Usage: claude-session upgrade <name>"
+    echo ""
+    echo "Available containers:"
+    cmd_list
+    exit 1
+  fi
+
+  local container_name=$(get_container_name "$input_name")
+  local backup_dir=$(mktemp -d)
+
+  # Check if container exists
+  if ! docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"; then
+    echo "Error: Container not found: $input_name"
+    echo ""
+    echo "Available containers:"
+    cmd_list
+    exit 1
+  fi
+
+  echo "╔══════════════════════════════════════════════════════════════════╗"
+  echo "║  Upgrading Container: $input_name"
+  echo "╚══════════════════════════════════════════════════════════════════╝"
+  echo ""
+
+  # Get container metadata
+  local source_dir=$(docker inspect "$container_name" --format '{{index .Config.Labels "'${LABEL_PREFIX}'.source-dir"}}')
+  local branch=$(docker inspect "$container_name" --format '{{index .Config.Labels "'${LABEL_PREFIX}'.branch"}}')
+  local is_git=$(docker inspect "$container_name" --format '{{index .Config.Labels "'${LABEL_PREFIX}'.is-git"}}')
+
+  echo "Container info:"
+  echo "  • Name: $input_name"
+  echo "  • Source: $source_dir"
+  echo "  • Branch: $branch"
+  echo "  • Is Git: $is_git"
+  echo ""
+
+  # Step 1: Backup the workspace
+  echo "Step 1: Backing up workspace..."
+  if docker cp "$container_name:/workspace/." "$backup_dir/" >/dev/null 2>&1; then
+    echo "  ✓ Workspace backed up"
+  else
+    echo "  ✗ Failed to backup workspace"
+    rm -rf "$backup_dir"
+    exit 1
+  fi
+
+  # Step 2: Stop and remove old container
+  echo ""
+  echo "Step 2: Removing old container..."
+  docker stop "$container_name" >/dev/null 2>&1 || true
+  docker rm "$container_name" >/dev/null 2>&1
+  echo "  ✓ Old container removed"
+
+  # Step 3: Create new container with new image
+  echo ""
+  echo "Step 3: Creating new container with updated image..."
+
+  # Determine working directory from backup
+  local work_dir="work"
+  if [ ! -d "$backup_dir/work/.git" ]; then
+    work_dir="main"
+  fi
+
+  cd "$source_dir"
+
+  # Create new session without starting Claude
+  if [ "$is_git" = "true" ] && [ -n "$branch" ]; then
+    # Start with the branch name
+    cmd_start "$input_name" --branch "$branch" > /dev/null 2>&1 &
+    local session_pid=$!
+
+    # Wait for container to be created and started
+    sleep 5
+
+    # Kill Claude that auto-started
+    docker exec "$container_name" pkill -9 claude 2>/dev/null || true
+    kill $session_pid 2>/dev/null || true
+    wait $session_pid 2>/dev/null || true
+  else
+    # Non-git or no worktree
+    cmd_start "$input_name" --no-worktree > /dev/null 2>&1 &
+    local session_pid=$!
+
+    sleep 5
+    docker exec "$container_name" pkill -9 claude 2>/dev/null || true
+    kill $session_pid 2>/dev/null || true
+    wait $session_pid 2>/dev/null || true
+  fi
+
+  echo "  ✓ New container created with updated image"
+
+  # Step 4: Restore workspace
+  echo ""
+  echo "Step 4: Restoring your changes..."
+  if docker cp "$backup_dir/." "$container_name:/workspace/" >/dev/null 2>&1; then
+    echo "  ✓ Workspace restored"
+  else
+    echo "  ✗ Failed to restore workspace"
+    rm -rf "$backup_dir"
+    exit 1
+  fi
+
+  # Fix git ownership if it's a git repo
+  if [ "$is_git" = "true" ]; then
+    docker exec "$container_name" bash -c 'git config --global --add safe.directory /workspace/main 2>/dev/null || true' >/dev/null 2>&1
+    if [ -d "$backup_dir/work/.git" ]; then
+      docker exec "$container_name" bash -c 'git config --global --add safe.directory /workspace/work 2>/dev/null || true' >/dev/null 2>&1
+    fi
+  fi
+
+  # Step 5: Verify
+  echo ""
+  echo "Step 5: Verifying upgrade..."
+  local gh_version=$(docker exec "$container_name" gh --version 2>/dev/null | head -1 || echo 'Not available')
+  local gh_config_count=$(docker exec "$container_name" ls /gh-config 2>/dev/null | wc -l | tr -d ' ')
+  local secrets_count=$(docker exec "$container_name" ls /secrets 2>/dev/null | wc -l | tr -d ' ')
+
+  echo "  • gh CLI: $gh_version"
+  echo "  • GitHub config: $gh_config_count files mounted"
+  echo "  • Secrets dir: $secrets_count files mounted"
+  echo "  • Working dir: /workspace/$work_dir"
+
+  # Cleanup
+  echo ""
+  echo "Step 6: Cleaning up backup..."
+  rm -rf "$backup_dir"
+  echo "  ✓ Backup removed"
+
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════════╗"
+  echo "║  ✅ Container upgraded successfully!                              ║"
+  echo "╚══════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "Your changes have been preserved. To attach to the upgraded container:"
+  echo "  claude-session attach $input_name"
+}
+
 cmd_help() {
   cat <<'EOF'
 Claude Container Session Manager
@@ -599,6 +1048,8 @@ SUBCOMMANDS:
   cleanup              Remove all exited containers
   shell <name>         Open bash shell in container
   logs <name>          View container logs
+  upgrade <name>       Upgrade container to latest image (preserves changes)
+  github-auth          Configure GitHub authentication for all sessions
   help                 Show this help
 
 EXAMPLES:
@@ -635,6 +1086,29 @@ EXAMPLES:
   # Clean up stopped containers
   claude-session cleanup
 
+  # Upgrade container to latest image
+  claude-session upgrade my-feature
+
+  # Setup GitHub authentication
+  claude-session github-auth
+
+  # Re-authenticate with GitHub
+  claude-session github-auth --reauth
+
+SECRETS MANAGEMENT:
+  Global secrets are stored in:
+    ~/.config/claude-container/secrets/
+
+  Files:
+    .env.global         Global environment variables for all sessions
+    *.key, *.json       Credential files (mounted at /secrets in containers)
+
+  Project secrets:
+    .env                Auto-created in each project (added to .gitignore)
+    .env.example        Template (safe to commit)
+
+  Secret files are automatically protected from git commits.
+
 OPTIONS:
   start command:
     --branch <name>      Branch name for worktree
@@ -647,13 +1121,20 @@ OPTIONS:
   clone command:
     --branch <name>      Branch name for new worktree
 
+  github-auth command:
+    --reauth             Force re-authentication
+
 CONFIGURATION:
-  Image:       $DOCKER_IMAGE
-  Config Dir:  $CONFIG_DIR
+  Image:          $DOCKER_IMAGE
+  Config Dir:     $CONFIG_DIR
+  GitHub Config:  $GH_CONFIG_DIR
+  Secrets Dir:    $SECRETS_DIR
 
   Override with environment variables:
-    CLAUDE_IMAGE         Docker image name
-    CLAUDE_CONFIG_DIR    Claude credentials directory
+    CLAUDE_IMAGE            Docker image name
+    CLAUDE_CONFIG_DIR       Claude credentials directory
+    CLAUDE_GH_CONFIG_DIR    GitHub credentials directory
+    CLAUDE_SECRETS_DIR      Secrets storage directory
 
 For more information, see README-sessions.md
 EOF
@@ -692,6 +1173,8 @@ main() {
     cleanup) cmd_cleanup "$@" ;;
     shell)   cmd_shell "$@" ;;
     logs)    cmd_logs "$@" ;;
+    upgrade) cmd_upgrade "$@" ;;
+    github-auth) cmd_github_auth "$@" ;;
     *)
       echo "Error: Unknown subcommand: $subcommand"
       echo ""
