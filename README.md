@@ -10,6 +10,7 @@ A Docker container with Ubuntu 24.04, Node.js 24, Bun, Git, Claude CLI, and esse
 - **Claude CLI** - Anthropic's official CLI
 - **Git** - Version control
 - **GitHub CLI** - Create PRs, manage issues, and more
+- **PostgreSQL Support** - Automatic database provisioning per session with PostgreSQL client tools
 - **Development Tools** - ripgrep, fd-find, jq, vim, nano, tmux, htop, and more
 - **Build Tools** - gcc, make, python3, pip
 - **Session Manager** - Manage multiple isolated Claude sessions with git worktree support
@@ -54,6 +55,35 @@ Inside Claude sessions, you can now use:
 - `gh pr list` - List PRs
 - `gh issue create` - Create issues
 - All other gh CLI commands
+
+### Database Support
+
+Each session automatically provisions an isolated PostgreSQL database. Perfect for TypeScript projects that need database connectivity.
+
+```bash
+# Start a session (database is automatically created)
+./claude-session.sh start
+
+# Inside the session, check database status
+claude-db status
+
+# Use in your TypeScript code
+# DATABASE_URL is automatically configured
+```
+
+**Database Helper Commands:**
+- `claude-db status` - Check connection
+- `claude-db psql` - Open PostgreSQL shell
+- `claude-db import schema.sql` - Import SQL file
+- `claude-db export backup.sql` - Export database
+- `claude-db info` - View connection details
+
+**Disable database if not needed:**
+```bash
+CLAUDE_DB_ENABLED=false ./claude-session.sh start
+```
+
+**See [README-database.md](README-database.md) for complete documentation.**
 
 ### Secret Management
 

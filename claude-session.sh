@@ -12,6 +12,13 @@ GH_CONFIG_DIR="${CLAUDE_GH_CONFIG_DIR:-${HOME}/.config/claude-container/gh}"
 SECRETS_DIR="${CLAUDE_SECRETS_DIR:-${HOME}/.config/claude-container/secrets}"
 LABEL_PREFIX="claude-session"
 
+# Database configuration
+DB_ENABLED="${CLAUDE_DB_ENABLED:-true}"
+DB_IMAGE="${CLAUDE_DB_IMAGE:-postgres:17-alpine}"
+DB_USER="${CLAUDE_DB_USER:-postgres}"
+DB_PASSWORD="${CLAUDE_DB_PASSWORD:-postgres}"
+DB_NAME="${CLAUDE_DB_NAME:-appdb}"
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -245,6 +252,75 @@ generate_container_name() {
   fi
 }
 
+get_database_name() {
+  local container_name="$1"
+  echo "${container_name}-db"
+}
+
+get_network_name() {
+  local container_name="$1"
+  echo "${container_name}-net"
+}
+
+start_database() {
+  local container_name="$1"
+  local db_container_name=$(get_database_name "$container_name")
+  local network_name=$(get_network_name "$container_name")
+
+  if [ "$DB_ENABLED" != "true" ]; then
+    return 0
+  fi
+
+  echo "Setting up database..."
+
+  # Create Docker network
+  docker network create "$network_name" >/dev/null 2>&1 || true
+
+  # Start PostgreSQL container
+  docker run -d \
+    --name "$db_container_name" \
+    --network "$network_name" \
+    --label "${LABEL_PREFIX}.type=database" \
+    --label "${LABEL_PREFIX}.session=$container_name" \
+    -e POSTGRES_USER="$DB_USER" \
+    -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+    -e POSTGRES_DB="$DB_NAME" \
+    "$DB_IMAGE" >/dev/null
+
+  # Connect session container to network
+  docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
+
+  # Wait for database to be ready
+  echo "Waiting for database to be ready..."
+  local max_attempts=30
+  local attempt=0
+  while [ $attempt -lt $max_attempts ]; do
+    if docker exec "$db_container_name" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+      echo "✓ Database ready"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+
+  echo "Warning: Database did not become ready in time"
+  return 1
+}
+
+stop_database() {
+  local container_name="$1"
+  local db_container_name=$(get_database_name "$container_name")
+  local network_name=$(get_network_name "$container_name")
+
+  # Stop and remove database container
+  if docker ps -a --format '{{.Names}}' | grep -q "^${db_container_name}$"; then
+    docker rm -f "$db_container_name" >/dev/null 2>&1 || true
+  fi
+
+  # Remove network
+  docker network rm "$network_name" >/dev/null 2>&1 || true
+}
+
 get_container_name() {
   local input_name="$1"
 
@@ -373,6 +449,11 @@ cmd_start() {
   # Start container
   docker start "$container_name" >/dev/null
 
+  # Start database if enabled
+  if [ "$DB_ENABLED" = "true" ]; then
+    start_database "$container_name"
+  fi
+
   # Create worktree (if git repo and not disabled)
   if [ "$is_git" = true ] && [ "$no_worktree" = false ]; then
     echo "Creating git worktree on branch: $branch_name"
@@ -387,6 +468,7 @@ cmd_start() {
   fi
 
   # Setup secret protection and .env template
+  local db_container_name=$(get_database_name "$container_name")
   docker exec "$container_name" bash -c "
     work_dir=\"work\"
     if [ ! -d /workspace/work/.git ]; then
@@ -403,11 +485,20 @@ EOF
       chmod 600 .env
     fi
 
+    # Add DATABASE_URL to .env if database is enabled
+    if [ '$DB_ENABLED' = 'true' ] && ! grep -q 'DATABASE_URL=' .env; then
+      echo '' >> .env
+      echo '# Database connection (auto-configured by claude-session)' >> .env
+      echo 'DATABASE_URL=postgresql://$DB_USER:$DB_PASSWORD@$db_container_name:5432/$DB_NAME' >> .env
+    fi
+
     # Create .env.example if not exists
     if [ ! -f .env.example ]; then
       cat > .env.example <<'EOF'
 # Project-specific secrets template
 # Copy to .env and fill in your values
+#
+# DATABASE_URL=postgresql://user:password@host:5432/database
 EOF
     fi
 
@@ -517,6 +608,20 @@ cmd_attach() {
   if ! docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
     echo "Starting container..."
     docker start "$container_name" >/dev/null
+
+    # Restart database if enabled
+    if [ "$DB_ENABLED" = "true" ]; then
+      local db_container_name=$(get_database_name "$container_name")
+      if docker ps -a --format '{{.Names}}' | grep -q "^${db_container_name}$"; then
+        if ! docker ps --format '{{.Names}}' | grep -q "^${db_container_name}$"; then
+          echo "Restarting database..."
+          docker start "$db_container_name" >/dev/null
+        fi
+      else
+        # Database doesn't exist, create it
+        start_database "$container_name"
+      fi
+    fi
   fi
 
   # Get user info from container labels
@@ -597,10 +702,11 @@ cmd_delete() {
     fi
   fi
 
-  # Remove container
-  echo "Removing container..."
+  # Remove database and network if they exist
+  echo "Removing container and database..."
+  stop_database "$container_name"
   docker rm -f "$container_name" >/dev/null
-  echo "✓ Container deleted"
+  echo "✓ Container and database deleted"
 }
 
 cmd_clone() {
@@ -758,7 +864,11 @@ cmd_cleanup() {
   read -p "Delete all exited containers? [y/N] " -r
   echo
   if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "$exited" | xargs docker rm >/dev/null
+    # Clean up each container and its database
+    while IFS= read -r container; do
+      stop_database "$container"
+      docker rm "$container" >/dev/null 2>&1 || true
+    done <<< "$exited"
     echo "✓ Cleanup complete"
   else
     echo "Cancelled"

@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     ripgrep \
     fd-find \
     sudo \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
@@ -52,6 +53,10 @@ RUN npm install -g @anthropic-ai/claude-code
 # Create config directories for Claude, GitHub, and secrets
 RUN mkdir -p ${CLAUDE_CONFIG_DIR} /gh-config /secrets && \
     chmod 755 /gh-config /secrets
+
+# Install database helper script
+COPY claude-db-helper.sh /usr/local/bin/claude-db
+RUN chmod +x /usr/local/bin/claude-db
 
 # Create entrypoint script to setup user
 RUN echo '#!/bin/bash\n\
