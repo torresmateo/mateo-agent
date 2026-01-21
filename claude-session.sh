@@ -10,6 +10,7 @@ DOCKER_IMAGE="${CLAUDE_IMAGE:-claude-dangerous}"
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.config/claude-container/config}"
 GH_CONFIG_DIR="${CLAUDE_GH_CONFIG_DIR:-${HOME}/.config/claude-container/gh}"
 SECRETS_DIR="${CLAUDE_SECRETS_DIR:-${HOME}/.config/claude-container/secrets}"
+SSH_DIR="${CLAUDE_SSH_DIR:-${HOME}/.config/claude-container/ssh}"
 LABEL_PREFIX="claude-session"
 
 # Database configuration
@@ -414,6 +415,12 @@ cmd_start() {
     env_file_arg="--env-file $SECRETS_DIR/.env.global"
   fi
 
+  # Prepare SSH directory mounting if SSH keys exist
+  local ssh_volume_args=""
+  if [ -d "$SSH_DIR" ] && [ -f "$SSH_DIR/id_ed25519" ]; then
+    ssh_volume_args="-v $SSH_DIR:/ssh-keys:ro"
+  fi
+
   # Create container with labels
   docker create \
     --name "$container_name" \
@@ -426,6 +433,7 @@ cmd_start() {
     -v "$CONFIG_DIR:/config" \
     -v "$GH_CONFIG_DIR:/gh-config" \
     -v "$SECRETS_DIR:/secrets:ro" \
+    $ssh_volume_args \
     $env_file_arg \
     -e CLAUDE_CONFIG_DIR=/config \
     -e GH_CONFIG_DIR=/gh-config \
@@ -452,6 +460,28 @@ cmd_start() {
   # Start database if enabled
   if [ "$DB_ENABLED" = "true" ]; then
     start_database "$container_name"
+  fi
+
+  # Setup SSH keys if they exist
+  if [ -d "$SSH_DIR" ] && [ -f "$SSH_DIR/id_ed25519" ]; then
+    docker exec "$container_name" bash -c "
+      # Create .ssh directory for the user
+      mkdir -p /home/$host_user/.ssh
+
+      # Copy SSH keys from mounted location
+      if [ -d /ssh-keys ]; then
+        cp /ssh-keys/id_ed25519 /home/$host_user/.ssh/
+        cp /ssh-keys/id_ed25519.pub /home/$host_user/.ssh/
+        cp /ssh-keys/config /home/$host_user/.ssh/ 2>/dev/null || true
+
+        # Set proper permissions
+        chown -R $host_uid:$host_gid /home/$host_user/.ssh
+        chmod 700 /home/$host_user/.ssh
+        chmod 600 /home/$host_user/.ssh/id_ed25519
+        chmod 644 /home/$host_user/.ssh/id_ed25519.pub
+        chmod 600 /home/$host_user/.ssh/config 2>/dev/null || true
+      fi
+    " >/dev/null 2>&1
   fi
 
   # Create worktree (if git repo and not disabled)
@@ -790,6 +820,12 @@ cmd_clone() {
     env_file_arg="--env-file $SECRETS_DIR/.env.global"
   fi
 
+  # Prepare SSH directory mounting if SSH keys exist
+  local ssh_volume_args=""
+  if [ -d "$SSH_DIR" ] && [ -f "$SSH_DIR/id_ed25519" ]; then
+    ssh_volume_args="-v $SSH_DIR:/ssh-keys:ro"
+  fi
+
   # Create new container
   docker create \
     --name "$new_container" \
@@ -803,6 +839,7 @@ cmd_clone() {
     -v "$CONFIG_DIR:/config" \
     -v "$GH_CONFIG_DIR:/gh-config" \
     -v "$SECRETS_DIR:/secrets:ro" \
+    $ssh_volume_args \
     $env_file_arg \
     -e CLAUDE_CONFIG_DIR=/config \
     -e GH_CONFIG_DIR=/gh-config \
@@ -825,6 +862,28 @@ cmd_clone() {
 
   # Start new container
   docker start "$new_container" >/dev/null
+
+  # Setup SSH keys if they exist
+  if [ -d "$SSH_DIR" ] && [ -f "$SSH_DIR/id_ed25519" ]; then
+    docker exec "$new_container" bash -c "
+      # Create .ssh directory for the user
+      mkdir -p /home/$host_user/.ssh
+
+      # Copy SSH keys from mounted location
+      if [ -d /ssh-keys ]; then
+        cp /ssh-keys/id_ed25519 /home/$host_user/.ssh/
+        cp /ssh-keys/id_ed25519.pub /home/$host_user/.ssh/
+        cp /ssh-keys/config /home/$host_user/.ssh/ 2>/dev/null || true
+
+        # Set proper permissions
+        chown -R $host_uid:$host_gid /home/$host_user/.ssh
+        chmod 700 /home/$host_user/.ssh
+        chmod 600 /home/$host_user/.ssh/id_ed25519
+        chmod 644 /home/$host_user/.ssh/id_ed25519.pub
+        chmod 600 /home/$host_user/.ssh/config 2>/dev/null || true
+      fi
+    " >/dev/null 2>&1
+  fi
 
   # Create new worktree
   if [ "$is_git" = "true" ]; then
@@ -926,6 +985,95 @@ cmd_logs() {
   local container_name=$(get_container_name "$input_name")
 
   docker logs "$container_name" "$@"
+}
+
+cmd_setup_ssh() {
+  local force_regenerate=false
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --regenerate)
+        force_regenerate=true
+        shift
+        ;;
+      *)
+        echo "Error: Unknown option: $1"
+        echo ""
+        echo "Usage: claude-session setup-ssh [--regenerate]"
+        exit 1
+        ;;
+    esac
+  done
+
+  # Check if SSH key already exists
+  if [ -f "$SSH_DIR/id_ed25519" ] && [ "$force_regenerate" = false ]; then
+    echo "SSH key already exists at: $SSH_DIR/id_ed25519"
+    echo ""
+    echo "Your public key is:"
+    echo ""
+    cat "$SSH_DIR/id_ed25519.pub"
+    echo ""
+    echo "To add this key to GitHub:"
+    echo "  1. Copy the public key above"
+    echo "  2. Go to https://github.com/settings/ssh/new"
+    echo "  3. Paste and save"
+    echo ""
+    echo "To regenerate the key, run: claude-session setup-ssh --regenerate"
+    return 0
+  fi
+
+  # Create SSH directory
+  mkdir -p "$SSH_DIR"
+  chmod 700 "$SSH_DIR"
+
+  if [ "$force_regenerate" = true ]; then
+    echo "Regenerating SSH key..."
+    rm -f "$SSH_DIR/id_ed25519" "$SSH_DIR/id_ed25519.pub"
+  else
+    echo "Generating new SSH key for Claude containers..."
+  fi
+
+  # Generate SSH key
+  ssh-keygen -t ed25519 -f "$SSH_DIR/id_ed25519" -N "" -C "claude-container@$(hostname)" >/dev/null 2>&1
+
+  if [ $? -eq 0 ]; then
+    chmod 600 "$SSH_DIR/id_ed25519"
+    chmod 644 "$SSH_DIR/id_ed25519.pub"
+
+    # Create SSH config
+    cat > "$SSH_DIR/config" <<'EOF'
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+    StrictHostKeyChecking accept-new
+EOF
+    chmod 600 "$SSH_DIR/config"
+
+    echo ""
+    echo "✓ SSH key generated successfully!"
+    echo ""
+    echo "Your public key is:"
+    echo ""
+    cat "$SSH_DIR/id_ed25519.pub"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Add this key to GitHub:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "  1. Copy the public key above"
+    echo "  2. Open: https://github.com/settings/ssh/new"
+    echo "  3. Title: Claude Container ($(hostname))"
+    echo "  4. Paste the key and click 'Add SSH key'"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Git SSH authentication will now work in all Claude sessions!"
+  else
+    echo "Error: Failed to generate SSH key"
+    return 1
+  fi
 }
 
 cmd_github_auth() {
@@ -1159,6 +1307,7 @@ SUBCOMMANDS:
   shell <name>         Open bash shell in container
   logs <name>          View container logs
   upgrade <name>       Upgrade container to latest image (preserves changes)
+  setup-ssh            Generate SSH key for git authentication in containers
   github-auth          Configure GitHub authentication for all sessions
   help                 Show this help
 
@@ -1199,6 +1348,9 @@ EXAMPLES:
   # Upgrade container to latest image
   claude-session upgrade my-feature
 
+  # Setup SSH for git authentication
+  claude-session setup-ssh
+
   # Setup GitHub authentication
   claude-session github-auth
 
@@ -1234,16 +1386,21 @@ OPTIONS:
   github-auth command:
     --reauth             Force re-authentication
 
+  setup-ssh command:
+    --regenerate         Force regenerate SSH key
+
 CONFIGURATION:
   Image:          $DOCKER_IMAGE
   Config Dir:     $CONFIG_DIR
   GitHub Config:  $GH_CONFIG_DIR
+  SSH Dir:        $SSH_DIR
   Secrets Dir:    $SECRETS_DIR
 
   Override with environment variables:
     CLAUDE_IMAGE            Docker image name
     CLAUDE_CONFIG_DIR       Claude credentials directory
     CLAUDE_GH_CONFIG_DIR    GitHub credentials directory
+    CLAUDE_SSH_DIR          SSH keys directory
     CLAUDE_SECRETS_DIR      Secrets storage directory
 
 For more information, see README-sessions.md
@@ -1284,6 +1441,7 @@ main() {
     shell)   cmd_shell "$@" ;;
     logs)    cmd_logs "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
+    setup-ssh) cmd_setup_ssh "$@" ;;
     github-auth) cmd_github_auth "$@" ;;
     *)
       echo "Error: Unknown subcommand: $subcommand"
