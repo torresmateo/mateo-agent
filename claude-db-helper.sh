@@ -9,18 +9,18 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Auto-source .env.claude-session if it exists
-if [ -f .env.claude-session ]; then
+# Auto-source .env if it exists (session variables are injected at the top)
+if [ -f .env ]; then
   set +u  # Temporarily disable unbound variable check
-  source .env.claude-session
+  source .env
   set -u  # Re-enable unbound variable check
-elif [ -f ../.env.claude-session ]; then
+elif [ -f ../.env ]; then
   set +u
-  source ../.env.claude-session
+  source ../.env
   set -u
-elif [ -f ../../.env.claude-session ]; then
+elif [ -f ../../.env ]; then
   set +u
-  source ../../.env.claude-session
+  source ../../.env
   set -u
 fi
 

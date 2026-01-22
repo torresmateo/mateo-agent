@@ -83,7 +83,7 @@ claude-db status
 CLAUDE_DB_ENABLED=false ./claude-session.sh start
 ```
 
-**For monorepos:** Sessions create `.env.claude-session` at your repo root with session-specific variables (like `DATABASE_URL`). See [README-monorepo.md](README-monorepo.md) for usage patterns.
+**For monorepos:** Session variables (like `DATABASE_URL`) are automatically injected at the top of your root `.env` file. Use `.env.local` in subdirectories for overrides. See [README-monorepo.md](README-monorepo.md) for usage patterns.
 
 **See [README-database.md](README-database.md) for complete documentation.**
 
