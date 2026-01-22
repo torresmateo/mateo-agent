@@ -10,15 +10,18 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Get database connection details from environment
+# postgresql://user:password@host:port/database
+DB_USER="${DATABASE_URL#*://}"
+DB_USER="${DB_USER%%:*}"
+DB_PASSWORD="${DATABASE_URL#*://}"
+DB_PASSWORD="${DB_PASSWORD#*:}"
+DB_PASSWORD="${DB_PASSWORD%%@*}"
 DB_HOST="${DATABASE_URL#*@}"
 DB_HOST="${DB_HOST%%:*}"
-DB_PORT="${DATABASE_URL#*:}"
+DB_PORT="${DATABASE_URL#*@}"
+DB_PORT="${DB_PORT#*:}"
 DB_PORT="${DB_PORT%%/*}"
 DB_NAME="${DATABASE_URL##*/}"
-DB_USER="${DATABASE_URL#*//}"
-DB_USER="${DB_USER%%:*}"
-DB_PASSWORD="${DATABASE_URL#*:}"
-DB_PASSWORD="${DB_PASSWORD%%@*}"
 
 show_help() {
   cat <<EOF

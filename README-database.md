@@ -97,14 +97,9 @@ export CLAUDE_DB_ENABLED=false
 
 # Customize database image (default: postgres:17-alpine)
 export CLAUDE_DB_IMAGE=postgres:16-alpine
-
-# Customize database credentials (default: postgres/postgres)
-export CLAUDE_DB_USER=myuser
-export CLAUDE_DB_PASSWORD=mypassword
-
-# Customize database name (default: appdb)
-export CLAUDE_DB_NAME=myapp
 ```
+
+**Note:** Database credentials are fixed at `postgres:postgres` with database name `appdb`. Since each session has its own isolated container, there's no collision risk and no need to customize credentials per session.
 
 Then start your session:
 
