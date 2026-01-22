@@ -9,21 +9,46 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Get database connection details from environment
+# Auto-source .env.claude-session if it exists
+if [ -f .env.claude-session ]; then
+  set +u  # Temporarily disable unbound variable check
+  source .env.claude-session
+  set -u  # Re-enable unbound variable check
+elif [ -f ../.env.claude-session ]; then
+  set +u
+  source ../.env.claude-session
+  set -u
+elif [ -f ../../.env.claude-session ]; then
+  set +u
+  source ../../.env.claude-session
+  set -u
+fi
+
+# Parse database connection details from environment (only if DATABASE_URL is set)
 # postgresql://user:password@host:port/database
-DB_USER="${DATABASE_URL#*://}"
-DB_USER="${DB_USER%%:*}"
-DB_PASSWORD="${DATABASE_URL#*://}"
-DB_PASSWORD="${DB_PASSWORD#*:}"
-DB_PASSWORD="${DB_PASSWORD%%@*}"
-DB_HOST="${DATABASE_URL#*@}"
-DB_HOST="${DB_HOST%%:*}"
-DB_PORT="${DATABASE_URL#*@}"
-DB_PORT="${DB_PORT#*:}"
-DB_PORT="${DB_PORT%%/*}"
-DB_NAME="${DATABASE_URL##*/}"
+parse_database_url() {
+  if [ -n "${DATABASE_URL:-}" ]; then
+    DB_USER="${DATABASE_URL#*://}"
+    DB_USER="${DB_USER%%:*}"
+    DB_PASSWORD="${DATABASE_URL#*://}"
+    DB_PASSWORD="${DB_PASSWORD#*:}"
+    DB_PASSWORD="${DB_PASSWORD%%@*}"
+    DB_HOST="${DATABASE_URL#*@}"
+    DB_HOST="${DB_HOST%%:*}"
+    DB_PORT="${DATABASE_URL#*@}"
+    DB_PORT="${DB_PORT#*:}"
+    DB_PORT="${DB_PORT%%/*}"
+    DB_NAME="${DATABASE_URL##*/}"
+  fi
+}
 
 show_help() {
+  parse_database_url
+  local host_info=""
+  if [ -n "${DB_HOST:-}" ]; then
+    host_info="  Database host: $DB_HOST"
+  fi
+
   cat <<EOF
 ${BLUE}claude-db${NC} - Database helper for Claude sessions
 
@@ -49,7 +74,7 @@ ${GREEN}Examples:${NC}
 
 ${GREEN}Connection:${NC}
   DATABASE_URL is automatically configured for your session
-  Database host: $DB_HOST
+$host_info
 EOF
 }
 
@@ -59,6 +84,7 @@ check_env() {
     echo "Database is not enabled for this session"
     exit 1
   fi
+  parse_database_url
 }
 
 cmd_status() {

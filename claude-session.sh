@@ -278,16 +278,22 @@ start_database() {
   # Create Docker network
   docker network create "$network_name" >/dev/null 2>&1 || true
 
-  # Start PostgreSQL container
-  docker run -d \
-    --name "$db_container_name" \
-    --network "$network_name" \
-    --label "${LABEL_PREFIX}.type=database" \
-    --label "${LABEL_PREFIX}.session=$container_name" \
-    -e POSTGRES_USER="$DB_USER" \
-    -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-    -e POSTGRES_DB="$DB_NAME" \
-    "$DB_IMAGE" >/dev/null
+  # Check if database container already exists
+  if docker ps -a --format '{{.Names}}' | grep -q "^${db_container_name}$"; then
+    echo "Database container already exists, ensuring it's running..."
+    docker start "$db_container_name" >/dev/null 2>&1 || true
+  else
+    # Start PostgreSQL container
+    docker run -d \
+      --name "$db_container_name" \
+      --network "$network_name" \
+      --label "${LABEL_PREFIX}.type=database" \
+      --label "${LABEL_PREFIX}.session=$container_name" \
+      -e POSTGRES_USER="$DB_USER" \
+      -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+      -e POSTGRES_DB="$DB_NAME" \
+      "$DB_IMAGE" >/dev/null
+  fi
 
   # Connect session container to network
   docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
@@ -582,6 +588,7 @@ SCRIPT_EOF
   # Copy script to container and execute
   docker cp "$setup_script" "$container_name:/tmp/setup-env.sh" >/dev/null
   docker exec \
+    --user "$host_uid:$host_gid" \
     -e DB_ENABLED="$DB_ENABLED" \
     -e DB_USER="$DB_USER" \
     -e DB_PASSWORD="$DB_PASSWORD" \
