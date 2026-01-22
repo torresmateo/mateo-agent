@@ -20,7 +20,7 @@ Manage multiple isolated Claude Code sessions using Docker containers with git w
 The Claude Container Session Manager (`claude-session.sh`) allows you to:
 
 - **Create isolated sessions**: Each session runs in its own Docker container with a complete copy of your repository
-- **Git worktree support**: Automatically creates git worktrees for isolated branch work
+- **Git worktree support**: Optional git worktrees for isolated branch work with tracked files only
 - **Persistent containers**: Sessions survive after you exit Claude and can be resumed anytime
 - **Shared credentials**: Authenticate once, use in all containers
 - **Session management**: List, attach, delete, and clone sessions easily
@@ -28,9 +28,10 @@ The Claude Container Session Manager (`claude-session.sh`) allows you to:
 ### How It Works
 
 1. **Copy, don't mount**: Creates an isolated copy of your directory in each container (no shared state)
-2. **Git worktrees**: For git repos, creates worktrees so you can work on different branches simultaneously
-3. **Persistent**: Containers stay around after you exit, so you can resume work later
-4. **Labeled containers**: Uses Docker labels to track metadata (source directory, branch, creation time)
+2. **All files accessible by default**: Includes `.gitignore`d files like `.env`, `node_modules`, etc.
+3. **Optional git worktrees**: Use `--git-worktree` flag to create clean checkouts with tracked files only
+4. **Persistent**: Containers stay around after you exit, so you can resume work later
+5. **Labeled containers**: Uses Docker labels to track metadata (source directory, branch, creation time)
 
 ## Quick Start
 
@@ -288,11 +289,11 @@ claude-session.sh start
 # Custom name
 claude-session.sh start my-feature
 
-# Specify branch name for worktree
-claude-session.sh start --branch feature/auth
+# Start session (all files accessible, including .gitignore'd files)
+claude-session.sh start my-session
 
-# Skip worktree creation (just copy files)
-claude-session.sh start --no-worktree
+# Use git worktree on a specific branch (isolates tracked files only)
+claude-session.sh start --git-worktree --branch feature/auth
 
 # Exclude patterns when copying
 claude-session.sh start --exclude "node_modules,dist,.next"
@@ -300,9 +301,9 @@ claude-session.sh start --exclude "node_modules,dist,.next"
 
 **What happens:**
 1. Creates a Docker container with a unique name
-2. Copies your entire directory (including `.git`) into the container
-3. For git repos: Creates a new worktree on a new branch
-4. Starts Claude in dangerous mode in the worktree
+2. Copies your entire directory (including `.git` and `.gitignore`d files) into the container
+3. Optionally (with `--git-worktree`): Creates a new git worktree on a new branch
+4. Starts Claude in dangerous mode with access to all files
 
 #### `list` - Show all sessions
 
@@ -366,7 +367,7 @@ claude-session.sh clone my-feature --branch feature/alternative-approach
 **What happens:**
 1. Copies all files from source container
 2. Creates a new container
-3. Creates a new git worktree on a new branch
+3. For git repos: Always creates a new git worktree on a new branch (unlike `start`, clone always uses worktrees for branch isolation)
 
 #### `cleanup` - Remove stopped containers
 
@@ -563,10 +564,9 @@ claude-session.sh start
 
 ### Git worktree errors
 
-**Problem:** Git commands fail or worktree not created.
+**Problem:** Git commands fail when using `--git-worktree` flag.
 
 **Common causes:**
-- Not in a git repository → Use `--no-worktree` flag
 - Detached HEAD state → Checkout a branch first
 - Corrupted git state → Check git status on host
 
@@ -575,11 +575,11 @@ claude-session.sh start
 # Check git status on host
 git status
 
-# If not a git repo, use --no-worktree
-claude-session.sh start --no-worktree
-
 # If detached HEAD, checkout a branch
 git checkout main
+claude-session.sh start --git-worktree
+
+# Or just use default (no worktree, all files accessible)
 claude-session.sh start
 ```
 

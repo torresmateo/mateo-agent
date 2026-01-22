@@ -346,7 +346,7 @@ get_container_name() {
 cmd_start() {
   local custom_name=""
   local branch_name=""
-  local no_worktree=false
+  local use_worktree=false
   local exclude_patterns=()
 
   # Parse arguments
@@ -356,8 +356,8 @@ cmd_start() {
         branch_name="$2"
         shift 2
         ;;
-      --no-worktree)
-        no_worktree=true
+      --git-worktree)
+        use_worktree=true
         shift
         ;;
       --exclude)
@@ -491,8 +491,8 @@ cmd_start() {
     " >/dev/null 2>&1
   fi
 
-  # Create worktree (if git repo and not disabled)
-  if [ "$is_git" = true ] && [ "$no_worktree" = false ]; then
+  # Create worktree (if git repo and explicitly enabled)
+  if [ "$is_git" = true ] && [ "$use_worktree" = true ]; then
     echo "Creating git worktree on branch: $branch_name"
     docker exec --user "$host_uid:$host_gid" "$container_name" bash -c "
       cd /workspace/main
@@ -1269,9 +1269,15 @@ cmd_upgrade() {
   cd "$source_dir"
 
   # Create new session without starting Claude
+  # Check if the backup had a worktree to preserve the setup
+  local worktree_flag=""
+  if [ "$is_git" = "true" ] && [ -d "$backup_dir/work/.git" ]; then
+    worktree_flag="--git-worktree"
+  fi
+
   if [ "$is_git" = "true" ] && [ -n "$branch" ]; then
-    # Start with the branch name
-    cmd_start "$input_name" --branch "$branch" > /dev/null 2>&1 &
+    # Start with the branch name (and worktree flag if needed)
+    cmd_start "$input_name" --branch "$branch" $worktree_flag > /dev/null 2>&1 &
     local session_pid=$!
 
     # Wait for container to be created and started
@@ -1282,8 +1288,8 @@ cmd_upgrade() {
     kill $session_pid 2>/dev/null || true
     wait $session_pid 2>/dev/null || true
   else
-    # Non-git or no worktree
-    cmd_start "$input_name" --no-worktree > /dev/null 2>&1 &
+    # Non-git session
+    cmd_start "$input_name" > /dev/null 2>&1 &
     local session_pid=$!
 
     sleep 5
@@ -1370,11 +1376,11 @@ EXAMPLES:
   # Start with custom name
   claude-session start my-feature
 
-  # Start with specific branch name
-  claude-session start --branch feature/new-auth
+  # Start with git worktree on a specific branch
+  claude-session start --git-worktree --branch feature/new-auth
 
-  # Start without creating worktree
-  claude-session start --no-worktree
+  # Start without git worktree (default - all files accessible)
+  claude-session start my-feature
 
   # List all sessions
   claude-session list
@@ -1425,8 +1431,8 @@ SECRETS MANAGEMENT:
 
 OPTIONS:
   start command:
-    --branch <name>      Branch name for worktree
-    --no-worktree        Skip worktree creation
+    --git-worktree       Create a git worktree (isolates tracked files only)
+    --branch <name>      Branch name for worktree (requires --git-worktree)
     --exclude <patterns> Comma-separated patterns to exclude (e.g., "node_modules,dist")
 
   delete command:
