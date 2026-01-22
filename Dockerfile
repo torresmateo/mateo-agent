@@ -48,7 +48,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
 RUN curl -fsSL https://bun.sh/install | bash
 
 # Install Claude CLI
-RUN npm install -g @anthropic-ai/claude-code
+# To force update: docker build --build-arg CLAUDE_VERSION=$(date +%s) -t claude-dangerous .
+ARG CLAUDE_VERSION=latest
+RUN echo "Installing Claude version cache: $CLAUDE_VERSION" && \
+    npm install -g @anthropic-ai/claude-code
 
 # Create config directories for Claude, GitHub, and secrets
 RUN mkdir -p ${CLAUDE_CONFIG_DIR} /gh-config /secrets && \

@@ -1346,6 +1346,45 @@ cmd_upgrade() {
   echo "  claude-session attach $input_name"
 }
 
+cmd_rebuild() {
+  echo "╔══════════════════════════════════════════════════════════════════╗"
+  echo "║  Rebuilding Docker Image                                         ║"
+  echo "╚══════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "This will rebuild the Docker image from scratch without using cache."
+  echo "This ensures you get the latest versions of all tools, including Claude."
+  echo ""
+  echo "Image to rebuild: $DOCKER_IMAGE"
+  echo ""
+
+  read -p "Continue with rebuild? [y/N] " -r
+  echo
+
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Rebuild cancelled"
+    return 0
+  fi
+
+  echo "Starting full rebuild (this may take several minutes)..."
+  echo ""
+
+  if docker build --no-cache -t "$DOCKER_IMAGE" .; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  ✅ Image rebuilt successfully!                                   ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "New sessions will use the updated image."
+    echo "To upgrade existing sessions, use: claude-session upgrade <name>"
+  else
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  ❌ Rebuild failed!                                               ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    return 1
+  fi
+}
+
 cmd_help() {
   cat <<'EOF'
 Claude Container Session Manager
@@ -1365,6 +1404,7 @@ SUBCOMMANDS:
   shell <name>         Open bash shell in container
   logs <name>          View container logs
   upgrade <name>       Upgrade container to latest image (preserves changes)
+  rebuild              Rebuild Docker image from scratch (gets latest Claude)
   setup-ssh            Generate SSH key for git authentication in containers
   github-auth          Configure GitHub authentication for all sessions
   help                 Show this help
@@ -1405,6 +1445,9 @@ EXAMPLES:
 
   # Upgrade container to latest image
   claude-session upgrade my-feature
+
+  # Rebuild Docker image (updates Claude and all tools)
+  claude-session rebuild
 
   # Setup SSH for git authentication
   claude-session setup-ssh
@@ -1475,6 +1518,14 @@ main() {
   # Help can run without checks
   if [ "$subcommand" = "help" ] || [ "$subcommand" = "--help" ] || [ "$subcommand" = "-h" ]; then
     cmd_help
+    exit 0
+  fi
+
+  # Rebuild can run without image check (we're building it)
+  if [ "$subcommand" = "rebuild" ]; then
+    check_docker
+    shift || true
+    cmd_rebuild "$@"
     exit 0
   fi
 
